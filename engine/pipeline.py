@@ -38,7 +38,7 @@ ADDRESS_LABEL = re.compile(r"(?i)(?:\baddress|\baddr\.?|पता|ग्रा�
 ADDRESS_PREFIX = re.compile(r"(?i)^(?:gram|gaon|village|vill\.?|tehsil|teh\.?|mohalla|moh\.?|near|opp\.?)\s+")
 PIN_LITERAL = re.compile(r"(?<!\d)\d{6}(?!\d)")
 GENDER_HEADER = re.compile(r"^(?:gender|sex|ling)$")
-DATE_TEXT = re.compile(r"\d{1,4}[/-]\d{1,2}[/-]\d{1,4}")
+DATE_TEXT = re.compile(r"\d{1,4}[/-]\d{1,2}[/-]\d{1,4}|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d|\d\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)")
 
 FHIR_IDENTIFIER_SYSTEM = "urn:parda:pseudonym"
 
@@ -259,7 +259,12 @@ class Engine:
             result = apply_spans(text, spans)
             self.applied.update(result.applied)
             return result.text
-        spans += clinical_spans(text, self.terms)
+        clinical = clinical_spans(text, self.terms)
+        # A clinical term (a medicine or diagnosis from config) is never a name, even when a name pattern
+        # matches it next to a phone or label. Identifiers are not affected.
+        terms = [(c.start, c.end) for c in clinical if c.detector == "term"]
+        spans = [sp for sp in spans if sp.priority >= P_ID or not any(sp.start < te and ts < sp.end for ts, te in terms)]
+        spans += clinical
         if ctx.unit_key:
             spans += date_spans(text, self._date_fn(ctx))
         result = apply_spans(text, spans)

@@ -13,6 +13,11 @@ from engine.config import Policy
 from engine.crypto import date_offset
 
 
+MONTH_NAME = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+              "October", "November", "December"]
+MONTH_NUMBER = {name: i + 1 for i, name in enumerate(MONTH_NAME)}
+
+
 @dataclass
 class DateShifter:
     key: bytes          # derive_key(secret, "dates")
@@ -37,6 +42,14 @@ class DateShifter:
         if fmt == "iso":
             shifted = self.shift_parts(anchor, y, a, b)
             return shifted if shifted else "[DATE]"
+        if fmt == "named":
+            month = MONTH_NUMBER.get(a)
+            shifted = self.shift_parts(anchor, y, month, b) if month else None
+            if not shifted:
+                return "[DATE]"
+            s = dt.date.fromisoformat(shifted)
+            name = MONTH_NAME[s.month - 1]
+            return f"{s.day} {name} {s.year}" if sep == "dmonth" else f"{name} {s.day}, {s.year}"
         order_month_first = hint if month_first is None else month_first
         day, mon = (b, a) if order_month_first else (a, b)
         shifted = self.shift_parts(anchor, y, mon, day)

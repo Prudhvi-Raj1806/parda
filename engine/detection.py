@@ -104,6 +104,9 @@ _SHAPES: list[tuple[str, re.Pattern, int]] = [
     ("INSURANCE_ID", re.compile(r"PMJAY-[A-Z]{2}-\d+"), P_ID),
     ("INSURANCE_ID", re.compile(r"\bPOL/\d+/\d+"), P_ID),
     ("MRN", re.compile(r"(?<![A-Za-z0-9])(?:UHID|JJH|SNJ|DHH\d{0,4})[-/]\d[\d/-]*"), P_ID),
+    # Hospital numbers from any hospital: letters, then digit groups (KMR/25/10000, IP-26-00130, JJH-0076928).
+    ("MRN", re.compile(r"(?<![A-Za-z0-9])[A-Z]{2,6}(?:[-/]\d{2,4}){1,2}[-/]\d{4,}"), P_ID),
+    ("MRN", re.compile(r"(?<![A-Za-z0-9])[A-Z]{2,6}-\d{5,}"), P_ID),
     ("MRN", re.compile(r"(?<![A-Za-z0-9])(?i:IPD?|ADM|OPD?|MRN)[-/]?(?:\d{2,4}[-/])?\d{4,}(?:[-/]\d+)*"), P_ID),
     ("PHONE", re.compile(r"(?<![\d-])(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?![\d-])"), P_ID),
     # Devanagari digits: a 10-digit mobile written in Hindi numerals (mobiles start with 6-9).
@@ -111,6 +114,9 @@ _SHAPES: list[tuple[str, re.Pattern, int]] = [
 ]
 
 _DATE_DMY = re.compile(r"(?<![\d/-])(\d{1,2})([/-])(\d{1,2})\2(\d{4})(?![\d/-])")
+_MONTHS = "January|February|March|April|May|June|July|August|September|October|November|December"
+_DATE_NAMED_DMY = re.compile(r"(?<![\d])(\d{1,2})\s+(" + _MONTHS + r")\s+(\d{4})(?!\d)")
+_DATE_NAMED_MDY = re.compile(r"\b(" + _MONTHS + r")\s+(\d{1,2}),?\s+(\d{4})(?!\d)")
 _DATE_ISO = re.compile(r"(?<![\d-])(\d{4})-(\d{2})-(\d{2})(?![\d-])")
 PATH_ID = re.compile(r"(?<=[A-Za-z]_)\d{5,8}(?=[\\/_.]|$)")
 PIN_LITERAL = re.compile(r"(?<!\d)\d{6}(?!\d)")
@@ -141,6 +147,12 @@ def date_spans(text: str, shift) -> list[Span]:
             month_first = None  # ambiguous: the caller's hint decides
         new = shift(y, a, b, month_first, "dmy", sep)
         out.append(Span(m.start(), m.end(), "DATE", P_GENERIC, replacement=new, detector="date"))
+    for m in _DATE_NAMED_DMY.finditer(text):
+        new = shift(int(m.group(3)), m.group(2), int(m.group(1)), None, "named", "dmonth")
+        out.append(Span(m.start(), m.end(), "DATE", P_GENERIC, replacement=new, detector="date"))
+    for m in _DATE_NAMED_MDY.finditer(text):
+        new = shift(int(m.group(3)), m.group(1), int(m.group(2)), None, "named", "monthd")
+        out.append(Span(m.start(), m.end(), "DATE", P_GENERIC, replacement=new, detector="date"))
     for m in _DATE_ISO.finditer(text):
         new = shift(int(m.group(1)), int(m.group(2)), int(m.group(3)), False, "iso", "-")
         out.append(Span(m.start(), m.end(), "DATE", P_GENERIC, replacement=new, detector="date"))
@@ -158,7 +170,7 @@ _CLINICAL: list[re.Pattern] = [
     re.compile(r"\d+(?:\.\d+)?\s?(?:g/dL|mg/dL|mmol/L|%|/cumm|/µL|/uL|mIU/L|ng/mL|U/L|IU/L|mEq/L|fL|pg)\b"),  # labs
     re.compile(r"\b[A-Z]\d{2}(?:\.\d{1,2})?\b"),                                                 # ICD-10 codes
     re.compile(r"\b\d+\s?(?:days?|nights?|hrs?|hours?)\b", re.IGNORECASE),                        # stay length
-    re.compile(r"\b[A-Za-z]+(?:pril|sartan|olol|statin|mycin|cillin|prazole|floxacin|cycline|dipine|"
+    re.compile(r"\b(?!April\b)[A-Za-z]+(?:pril|sartan|olol|statin|mycin|cillin|prazole|floxacin|cycline|dipine|"
                r"formin|azole|oxacin|tidine|parin|mab|nib)\b", re.IGNORECASE),                    # drug names
     re.compile(r"\bC/O\s+(?:fever|pain|cough|weakness|breathlessness|headache|vomiting|chest pain)\b",
                re.IGNORECASE),                                                                    # complaints

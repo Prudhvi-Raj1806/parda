@@ -29,7 +29,9 @@ GLOBAL_RX = {
     "EMAIL": re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),
     "INS": re.compile(r"(PMJAY-[A-Z]{2}-\d+|POL/\d+/\d+)"),
 }
-LOCAL_RX = re.compile(r"(?<![A-Za-z0-9])((?:UHID|JJH|SNJ|DHH\d{0,4}|IPD?|ADM|OPD)[-/]?\d[\d/-]*\d)")
+LOCAL_RX = re.compile(r"(?<![A-Za-z0-9])([A-Z]{2,6}(?:[-/]\d{2,4}){1,2}[-/]\d{4,}|[A-Z]{2,6}-\d{5,})")
+# Episode numbers (one per admission) are not patient-level: two of them can belong to one patient.
+EPISODE_FAMILIES = {"IP", "IPD", "ADM", "OPD", "BL", "OP", "RX", "REF", "LAB", "UP", "POL"}  # bills, referrals and orders are per event
 PHONE_RX = re.compile(r"(?<![\d-])(?:\+?91[\s-]?)?([6-9]\d{4}[\s-]?\d{5})(?![\d-])")
 PHONE_DEVA_RX = re.compile(r"(?<![०-९])[६-९][०-९]{9}(?![०-९])")
 DATE_DMY = re.compile(r"(?<![\d/-])(\d{1,2})([/-])(\d{1,2})\2(\d{4})(?![\d/-])")
@@ -132,7 +134,7 @@ def build_profile(key: tuple[str, str], text: str, fields: list[tuple[str, str]]
     for g in p.global_ids:
         type_values[g.split(":", 1)[0]].add(g)
     for loc in p.local_ids:
-        if loc.split(":", 1)[0] in ("UHID", "SNJ", "JJH", "DHH"):
+        if loc.split(":", 1)[0] not in EPISODE_FAMILIES:
             type_values["LOCAL"].add(loc)
     if any(len(v) > 1 for v in type_values.values()):
         p.ambiguous = True
@@ -156,7 +158,8 @@ def contradicts(a: Profile, b: Profile) -> bool:
         vb = {g for g in b.global_ids if g.startswith(kind + ":")}
         if va and vb and not (va & vb):
             return True
-    for family in ("UHID", "SNJ", "JJH", "DHH"):
+    families = {x.split(":", 1)[0] for x in a.local_ids | b.local_ids} - EPISODE_FAMILIES
+    for family in families:
         va = {x for x in a.local_ids if x.startswith(family + ":")}
         vb = {x for x in b.local_ids if x.startswith(family + ":")}
         if va and vb and not (va & vb):
