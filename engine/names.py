@@ -42,6 +42,13 @@ CUE_RX = re.compile(r"(?i)\b(?:mob|mobile|phone|called by|attendant|visitor|guar
 RELATIVE_CUE_RX = re.compile(r"(?i)\b(?:guardian|relative|attendant|visitor)\b")
 
 STOP_TOKENS = {
+    # column and form words that sit next to values in exports
+    "reg", "no", "abha", "naam", "ling", "umar", "pata", "gaon", "tehsil", "jila", "pin", "mobile",
+    "aadhar", "aadhaar", "policy", "uhid", "ipd", "opd", "mrn", "dob", "sex", "gender", "file", "report",
+    # qualifications and specialties that follow a clinician's name
+    "md", "ms", "dm", "mbbs", "dnb", "mch", "medicine", "surgery", "neurology", "pulmonary", "pulmonology",
+    "cardiology", "gynaecology", "gynecology", "orthopaedics", "orthopedics", "paediatrics", "pediatrics",
+    "nephrology", "oncology", "pathology", "radiology", "consultant", "physician", "specialist",
     # places, facility and document words
     "ward", "bed", "hospital", "centre", "center", "clinic", "sadan", "charitable", "trust",
     "multispeciality", "multispecialty", "nursing", "home", "department", "dept", "mohalla",
@@ -157,3 +164,52 @@ def redact_honorific_singles(text: str) -> tuple[str, int]:
     text = HON_SINGLE_RX.sub(_sub("PATIENT_NAME"), text)
     text = HON_SINGLE_KIN_RX.sub(_sub("RELATIVE_NAME"), text)
     return text, n
+
+
+def role_spans(text: str) -> list[tuple[int, int, str]]:
+    """Positions of person names in running text, with the role they play: (start, end, kind).
+
+    Labels ('Name: X'), relatives ('S/o X'), honorifics ('X ji'), kin terms ('X chachu') and candidates
+    next to a phone number or contact cue. A name after 'Dr.' is never returned.
+    """
+    if not text:
+        return []
+    out: list[tuple[int, int, str]] = []
+
+    def add(m: re.Match, group: str, kind: str) -> None:
+        start, end = m.start(group), m.end(group)
+        if start < 0:
+            return
+        raw = text[start:end]
+        name = trim_stop(raw)
+        if not name or not acceptable(name) or _after_doctor(text, start):
+            return
+        # Keep the span on the name's own tokens: label and function words at either end stay visible.
+        tokens = list(re.finditer(r"\S+", raw))
+        first = next((t for t in tokens if t.group(0).lower().strip(".,") not in STOP_TOKENS and t.group(0) not in STOP_DEVA), None)
+        last = next((t for t in reversed(tokens) if t.group(0).lower().strip(".,") not in STOP_TOKENS and t.group(0) not in STOP_DEVA), None)
+        if first is None or last is None:
+            return
+        out.append((start + first.start(), start + last.end(), kind))
+
+    for m in LABEL_RX.finditer(text):
+        group = "n" if m.group("n") else "d"
+        add(m, group, "PATIENT_NAME")
+    for m in RELATIVE_RX.finditer(text):
+        add(m, "n", "RELATIVE_NAME")
+    for m in HONORIFIC_RX.finditer(text):
+        add(m, "n", "PATIENT_NAME")
+    for m in KIN_RX.finditer(text):
+        add(m, "n", "RELATIVE_NAME")
+    for m in HON_SINGLE_RX.finditer(text):
+        if acceptable(m.group("n")) and not _after_doctor(text, m.start("n")):
+            out.append((m.start("n"), m.end("n"), "PATIENT_NAME"))
+    for m in HON_SINGLE_KIN_RX.finditer(text):
+        if acceptable(m.group("n")) and not _after_doctor(text, m.start("n")):
+            out.append((m.start("n"), m.end("n"), "RELATIVE_NAME"))
+    for m in CANDIDATE_RX.finditer(text):
+        window = text[max(0, m.start() - 60): m.end() + 60]
+        if PHONE_RX.search(window) or CUE_RX.search(window):
+            kind = "RELATIVE_NAME" if RELATIVE_CUE_RX.search(window) and not PHONE_RX.search(window) else "PATIENT_NAME"
+            add(m, "n", kind)
+    return out

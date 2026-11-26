@@ -1,4 +1,18 @@
-# Your privacy rules. main.py reads simple "key: value" lines.
-age_band_years: 5          # ages become bands like 45-49 (the band must contain the true age)
-date_shift_max_days: 180   # every date of one patient moves by the same secret offset
-min_group_size: 5          # TODO: suppress or widen quasi-identifier combos rarer than this (k-anonymity)
+# Parda privacy policy. Read by engine/config.py. Every value here is a policy choice, not a result.
+
+# Dates: one secret-derived offset per resolved patient, nonzero, within +/- this range.
+date_shift_min_days: 30
+date_shift_max_days: 365
+
+# Ages: truthful bands that always contain the real age.
+age_band_adult_years: 10       # adults: 40-49, 50-59 ...
+age_band_minor_years: 5        # under 18: narrower bands
+minor_age_threshold: 18
+
+# Risk-adaptive generalisation: quasi-identifier classes with fewer distinct patients than k are widened.
+k_anonymity: 5
+widened_age_band_years: 20
+
+# Identity resolution: a pair links only when its evidence score reaches this threshold and independent
+# corroboration exists (see engine/linkage.py).
+link_threshold: 85

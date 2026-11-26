@@ -1,0 +1,32 @@
+# Name variants used for matching only. Each canonical form lists spellings that refer to the same name.
+# Matching uses the canonical form; the text itself is never rewritten by these rules.
+
+mohammad:
+  - mohd
+  - md
+  - muhammad
+  - mohamad
+  - मोहम्मद
+ahmed:
+  - ahmad
+  - ahamed
+arif:
+  - aarif
+shahid:
+  - shahed
+  - shaahid
+fatima:
+  - fatema
+  - fatma
+mahesh:
+  - maheshwar
+  - mahesh kumar
+sunita:
+  - suneeta
+  - sunitha
+shanti:
+  - shanthi
+kumar:
+  - kumaar
+devi:
+  - debi

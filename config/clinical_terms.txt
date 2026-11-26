@@ -1,0 +1,38 @@
+# Clinical terms that must never be treated as a person's name, even when they look like one.
+# One term per line, matched case-insensitively as whole words. Lines starting with # are comments.
+# Generic-drug endings (-pril, -statin, -mycin ...) are also protected by rule in engine/clinical.py.
+
+Parkinson's disease
+Addison's disease
+Bell's palsy
+Typhoid fever
+Dengue
+Dengue, unspecified
+Essential (primary) hypertension
+Type 2 diabetes mellitus
+Anaemia
+Pneumonia
+Hepatitis B
+Haemoglobin
+Random Blood Sugar
+HbA1c
+Dolo
+Ramipril
+Amlodipine
+Metformin
+Atorvastatin
+Pantoprazole
+Paracetamol
+Azithromycin
+Doxycycline
+Cholecystectomy
+Caesarean section
+Laparoscopic cholecystectomy
+Inguinal hernia repair
+Chest pain
+Breathlessness
+Fever
+Cough
+Headache
+Vomiting
+Weakness

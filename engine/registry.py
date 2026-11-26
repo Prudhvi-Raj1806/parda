@@ -118,3 +118,22 @@ class Registry:
             return text, 0
         out.append(text[last:])
         return "".join(out), count
+
+
+def find_spans(self, text: str) -> list[tuple[int, int, str]]:
+    """Positions of every registered name or address literal in text: (start, end, kind). Doctors are skipped."""
+    if not text:
+        return []
+    if self._rx is None:
+        self._rx = self._compile()
+        if self._rx is None:
+            return []
+    spans = []
+    for m in self._rx.finditer(text):
+        if _DOCTOR_BEFORE.search(text[max(0, m.start() - 40):m.start()]):
+            continue
+        spans.append((m.start(), m.end(), self._kind_of(m.group(0))))
+    return spans
+
+
+Registry.find_spans = find_spans

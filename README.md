@@ -1,136 +1,161 @@
-# Secret Wards: offline privacy firewall for hospital records
+# Parda
 
-Yugaantar 2026 · DevForge, Track 3. A CPU-only, offline, LLM-free pipeline that removes personal
-information from synthetic Indian hospital records (English, Hindi and Hinglish), keeps medical values
-intact, links the same patient across files, and writes a report that the checker can verify.
+An offline privacy firewall for clinical records. Yugaantar 2026 · DevForge, Track 3 (Secret Wards).
 
-Standard library only. No model, no network, no downloads.
+Parda reads a messy folder of hospital exports (CSV and TSV in UTF-8, UTF-16 or cp1252; nested JSON; FHIR R4
+bundles; text notes; base64 attachments), removes personal information in English, Hindi and Hinglish,
+keeps medical values intact, links the same patient across files on evidence, and writes a verified release,
+a truthful report and a record map. It runs on the Python standard library plus PyYAML. It never calls a
+model, the network, or any service.
 
-## Setup and run
+## Run
 
 ```bash
-export RAKSHA_SECRET="a-long-random-secret"      # PowerShell: $env:RAKSHA_SECRET = "..."
+pip install -r requirements.txt                       # PyYAML only (setup step; network allowed)
+export RAKSHA_SECRET="a-long-random-secret"           # PowerShell: $env:RAKSHA_SECRET = "..."
 python main.py --input path/to/input --output path/to/empty-output
 ```
 
-The pipeline refuses to run without `RAKSHA_SECRET`. The secret keys the pseudonyms and the date
-shifts, and it is never written to the output or to any log.
+Parda refuses to run without `RAKSHA_SECRET`. The secret keys the pseudonyms and the date offsets, and it is
+never written to the output or to any log. stdout shows counts only.
 
-Check the output format with the organizers' `validate_output.py`, and the leak numbers with `check_dev.py`.
+Checks:
+
+```bash
+python tests/test_units.py        # unit tests: ingestion, detection, linkage, privacy, security helpers
+python tests/test_pipeline.py     # end-to-end tests on invented data
+python tools/benchmark.py --input path/to/input     # time and determinism (needs RAKSHA_SECRET)
+python tools/make_variant.py --input path/to/input --output path/to/copy   # changed-format copy for testing
+```
 
 ## Output
 
 ```
 output/
   sanitized/       same folders and formats as the input; file names scrubbed too
-  report.json      SHA-256 of every input file, honest counts, timing, memory
-  records.jsonl    one line per record: file, locator (row:N, /json/pointer or doc), patient pseudonym or null
+  report.json      SHA-256 of every input file, its status and reason, counts, entities, risk, timing
+  records.jsonl    one line per record: file, input locator (row:N, JSON pointer or doc), pseudonym or null
 ```
 
-Unreadable or unsupported files are quarantined: they are listed in the report and never copied.
+Files that cannot be processed are quarantined with a reason code (`unsupported_format`,
+`unsupported_attachment`, `unsafe_encoding`, `malformed_structure`, `resource_limit`, `empty_file`,
+`unsafe_path`, `unresolved_pii`, `clinical_integrity_failure`, `fhir_validation_failure`). They are listed in the
+report and never copied.
 
 ## How it works
 
-Two passes over the input, both read-only in the first:
+Two passes. The first only reads.
 
-1. **Learn (pass 1).** Every file is read once. Names come from name columns and name keys, from
-   labels (`Name:`, `नाम:`), relatives (`S/o`, `D/o`, `W/o`, `C/O <name>`), honorifics (`ji`, `sahab`,
-   `didi`, `chachu`) and from candidates next to a phone number or a contact cue. Addresses come
-   from address columns and `Address:` lines. Strong identifiers are collected per record.
-2. **Sanitise (pass 2).** Every string goes through the same channels, in this order:
-   the name registry (case-insensitive, separators and underscores included, never inside a longer
-   word; a name after `Dr.` is kept), honorific names, identifier shapes (Aadhaar, masked Aadhaar,
-   ABHA, PAN, e-mail, hospital numbers, insurance IDs, phones in Latin and Devanagari digits), dates
-   shifted by the record's offset, and finally the file name, JSON keys, headers and base64 attachments.
-   Columns and keys whose name says what they hold are replaced whole (`rakshak/detect_struct.py`).
+1. **Ingestion.** Files are discovered in sorted order and hashed. Symlinks are refused. Text is decoded
+   strictly (BOM-aware UTF-8 and UTF-16, then strict UTF-8, then cp1252 only when every byte is defined). JSON
+   is parsed with duplicate-key rejection and a depth limit. Anything uncertain is quarantined.
+2. **Pass 1, learn.** Names, addresses and dates of birth are read from column headers and JSON keys (matched
+   through `config/aliases.yaml`, English and romanised or Devanagari Hindi), from labels and relatives in text,
+   and from values that read as an address. Each record gets an identity profile: global IDs (Aadhaar, ABHA,
+   PAN, e-mail, insurance), hospital-scoped numbers (UHID, SNJ, JJH, DHH, IPD, ADM), mobile numbers, dates of
+   birth, canonical names (transliteration-aware via `config/name_variants.yaml`), relatives, locality and age.
+3. **Identity resolution.** Candidate pairs come from shared blocks (an ID, a phone, a name). Each pair gets an
+   evidence score: trusted global ID 100, namespaced local ID 85, mobile 45, date of birth 35, strong name 35 or
+   moderate name 20, relative 20, locality 10, age 5. A pair links only when it reaches 85 and has independent
+   corroboration. Contradictions always reject a pair: two different Aadhaar or hospital numbers of one kind,
+   incompatible dates of birth, or a record that names two patients. A merge is refused when any two members
+   of the resulting cluster would contradict each other. A shared phone or name alone never links anyone.
+4. **Pass 2, sanitise and gate.** Each file is rendered in memory as a set of candidate spans: identifier
+   shapes, role names, dataset names, address literals, dates, and clinical protection (doses, frequencies,
+   BP, SpO2, lab values, stay lengths, diagnoses, procedures, drug names, clinicians). Overlaps are resolved by
+   priority: high-confidence identifiers, then contextual roles, then clinical protection, then dataset names,
+   then generic patterns. Edits are applied right to left. Dates shift by one offset per patient. Ages become
+   bands that contain the true age. Pseudonyms are written inside the record, in the name field or the
+   hospital-number field, or into the first line of a note.
+5. **Release gate.** Each file's bytes are checked before anything is written: the output re-parses (G1); no
+   dataset name, identifier shape or input identifier remains (G2, G3); every clinical fingerprint from the
+   input is still present (G4); every pseudonym written into the record is present in it (G5, or the record's
+   link is withdrawn); the path is safe (G6). A failed file is withheld with its reason. Only then are files
+   written. The input is re-hashed first, and the run stops if it changed.
 
-### Files
+### Keys and pseudonyms
 
-| File | Role |
+`RAKSHA_SECRET` yields independent keys per purpose, so a pseudonym can never be confused with a date offset
+(`engine/crypto.py`). A pseudonym is `PSN-` plus six base32 characters of HMAC over the cluster's smallest
+identifier, and it is lengthened deterministically if two clusters would collide. A date offset is 30 to 365
+days, nonzero, fixed per patient, and applied to every date of that patient. An unlinked record gets its own
+offset. HMAC is pseudonymisation, not anonymity: anyone holding the secret can recompute a pseudonym from a
+known identifier.
+
+## Files
+
+| Path | Role |
 | --- | --- |
-| `main.py` | Entry point, both passes, report and records |
-| `rakshak/detect_struct.py` | Column and key rules, identifier shapes, age and date columns |
-| `rakshak/detect_text.py` | Name discovery in free text (labels, relatives, honorifics, phone context) |
-| `rakshak/registry.py` | Learned names and address literals, matched across all channels; districts are kept |
-| `rakshak/link.py` | Strong identifiers and union-find linking |
-| `rakshak/hidden.py` | Base64 attachments and file-name scrubbing |
-| `config/policy.yaml` | Age band width and maximum date shift |
-| `tests/test_pipeline.py` | Smoke tests on invented data (`python tests/test_pipeline.py`) |
+| `main.py` | Entry point (`run` in `raksha.toml`) |
+| `engine/pipeline.py` | Two passes, the release gate, records and the report |
+| `engine/ingestion.py` | Discovery, hashing, strict decoding, parsing, reason codes |
+| `engine/detection.py` | Header classifier, identifier shapes, clinical protection, date spans |
+| `engine/names.py` | Name discovery in running text: labels, relatives, honorifics, phone context |
+| `engine/registry.py` | Names and address literals learned from the input, matched across channels |
+| `engine/linkage.py` | Identity profiles, evidence scores, contradictions, cluster merging |
+| `engine/sanitize.py` | Span resolution and editing (the only place text is changed) |
+| `engine/privacy.py` | Date offsets, age bands, widening |
+| `engine/crypto.py` | Domain-separated keys, pseudonyms, date offsets |
+| `engine/config.py` | Loads the policy and rule files |
+| `engine/hidden.py` | Base64 attachments |
+| `config/policy.yaml` | Date range, age bands, k, link threshold |
+| `config/aliases.yaml` | Field names in English and Hindi, by role |
+| `config/name_variants.yaml` | Spelling variants used for matching only |
+| `config/clinical_terms.txt` | Clinical terms protected from being read as names |
+| `tests/` | Unit and end-to-end tests on invented data |
+| `tools/` | Benchmark, changed-format copy |
+| `docs/brief.pdf` | Two-page project brief |
 
-## Linking
+## Measured results
 
-Records are linked only by evidence that identifies one person:
+Measured on this machine (Windows 11, Python 3.12) on the practice data, using the kit's checker with a local
+copy that maps files by the hash of the file on disk. The kit's answer key does not match 172 of its 200 input
+hashes, so the official checker may score differently. These are rough guides, not the official score.
 
-- strong identifiers: Aadhaar, ABHA, PAN, e-mail, insurance IDs, hospital numbers (UHID, SNJ, JJH, DHH);
-  IPD and ADM episode numbers are also used, since one admission has one number;
-- mobile numbers, used as link keys;
-- a record that names two different patients (a ward sheet, a helpdesk ticket, a bundle with several
-  patients) links nothing, so it cannot merge two people.
+| Check | Practice data | Changed headers (copy) |
+| --- | --- | --- |
+| Personal data still visible | 0.6% (20 of 3,230) | 1.2% (40 of 3,230) |
+| Planted canaries in output | 0 of 4 | 0 of 4 |
+| Medical values kept | 99.8% (4,844 of 4,855) | 99.8% |
+| Linking precision / recall (F0.5) | 1.00 / 0.84 (0.96) | 1.00 / 0.83 (0.96) |
+| Files quarantined | 6 (all expected: pdf, jpg, xml, empty, deep, truncated) | 6 |
+| Records linked | 753 of 822 | 753 of 822 |
 
-A shared name, village or doctor never links records. A name together with a date of birth was tried
-as a second rule; on the practice data it produced two wrong merges, so it is switched off
-(`name_dob_keys` in `rakshak/link.py` is kept but unused).
+Run: about 5 seconds for 200 files, identical output on a repeat run. Peak memory is not measured on Windows.
 
-The pseudonym is `HMAC-SHA256(RAKSHA_SECRET, smallest identifier key of the cluster)`, written into the
-patient's name field (CSV) or name key (JSON), and into the first line of a text note.
-
-## Privacy and utility choices
-
-| Item | Choice |
-| --- | --- |
-| Patient name | Pseudonym where the record is linked, otherwise `[PATIENT_NAME]` |
-| Relative name | `[RELATIVE_NAME]` |
-| Doctor name | Kept (`Dr. ...` is never registered as a patient) |
-| Dates | One offset per patient (per record when unlinked); format and gaps are kept, so a 2-day stay stays 2 days |
-| Date of birth | Shifted like any date (not removed), so the policy's "shift" option is used |
-| Age | 5-year band that contains the true age (`48` becomes `45-49`) |
-| Village, house, locality, landmark | Removed (`[ADDRESS]`, or removed from free text by literal match) |
-| PIN | Removed |
-| District | Kept (the generalised location) |
-| Hospital ward (`Ward 4` in a discharge) | Kept, since it is medical context; a `Ward N` in an address is therefore not removed |
-| Medicines, doses, `1-0-1`, lab values, diagnoses | Never touched |
-
-## Security design
-
-- Nothing personal is printed. Stdout shows counts only; error messages show exception class and file hash.
-- Unparseable files are quarantined, never copied. Files whose names collide after scrubbing get a
-  suffix taken from the input hash, so no file is overwritten.
-- No temporary files: the registry and the linker live in memory.
-- The secret is read from the environment and is never written.
-- Output is deterministic: the same input and secret give byte-identical output.
-
-## Measured on the practice data (rough guide, not the official score)
-
-Measured with `check_dev.py` after a local fix to the checker (see limits):
-
-| Check | Result |
-| --- | --- |
-| Personal data still visible | 0.6% (20 of 3,230 pieces), down from 100% |
-| Canaries found in the output | 0 of 4 |
-| Medical values kept | 99.4% (4,825 of 4,855) |
-| Linking (precision / recall) | 1.00 / 0.90 |
-| Smoke tests | 9 of 9 pass |
-
-Renaming all CSV headers in a copy of the practice data raised leaks to 4.4% (the rules depend on header
-names). See limitations.
+Re-identification risk (`report.json` → `risk`). The quasi-identifier is age band and sex. Before widening,
+24 of 29 classes had fewer than 5 distinct patients. Widening the age band to 20 years for those units brings
+the count to 12 classes still below k. Those classes remain small, and the report says so.
 
 ## Limitations
 
-- **Header dependence.** Column rules recognise common English and romanised-Hindi headers. Unknown
-  headers rely on text-level rules, so an address column with an unfamiliar name can leak (4.4% with
-  renamed headers versus 0.6% with the original headers).
-- **Names without a label or a phone number** are not discovered (for example a bare first name in a note,
-  or a Devanagari name in running text). These are the largest remaining leaks.
-- **Dates** in an unfamiliar format are not shifted. Only day-month-year, month-day-year when the header says
-  `MM/DD`, and ISO dates are handled.
-- **FHIR** is kept as JSON with the same structure, but references and coding are not validated against R4.
-- **Checker mismatch (practice data).** 172 of the 200 hashes in `dev/truth/truth.json` do not match the input
-  files on disk, so `check_dev.py` cannot map most renamed outputs. The numbers above use a local copy of the
-  checker that maps by the hash of the file on disk. The official scorer may differ.
-- **Tuned on practice data.** Name and address rules were adjusted against the practice data. Hidden data may do
-  worse, and the header-rename test above is the best measure we have of that.
-- The first hidden-data run is the real test. We have not run the official `check_submission.py`
-  (it failed on Windows paths because of how it quotes the output folder).
+- **Names in unlabelled text.** A name with no label, honorific or nearby phone (for example a bare first name
+  in a nursing note) is not discovered. Devanagari names in running text are found only after a label or next
+  to a phone number.
+- **Ward numbers.** A hospital ward is kept as clinical context, so a ward number written as an address can
+  still appear in a discharge note.
+- **Linking recall.** Records with no identifier and no DOB are left unlinked (`patient: null`), which costs
+  recall and not precision. One patient's records are sometimes split into several clusters.
+- **Dates.** Dates in unfamiliar formats are not recognised. Dates of birth in free text are shifted only when
+  they are written day-month-year or month-day-year.
+- **FHIR.** Bundles keep their JSON structure, and references are not rewritten. Validation is structural
+  (resourceType and entry shape), not full R4 validation.
+- **Column rules** depend on the aliases file. An unfamiliar header falls back to value-level checks, which
+  leak more (1.2% against 0.6% above).
+- **Learned names over-match.** A name learned from one record is removed everywhere in the input, including
+  other people's notes that contain the same words. This favours privacy over utility.
+- **Tuning.** The rules were tuned on the practice data; the changed-header copy is the closest test we have
+  of how they transfer.
+- **Not run:** `check_submission.py` from the kit (it fails on Windows paths), and any Linux or offline clean-machine test.
+
+## Security design
+
+- The secret comes from the environment. It is never printed, logged or written. The run refuses to start without it.
+- stdout and stderr show counts only. Errors show exception classes and input hashes, never content.
+- No temporary files. The registry, profiles and outputs live in memory until the gate passes.
+- Unreadable or unsafe inputs are quarantined. Nothing is copied raw. Symlinks are refused.
+- Output is deterministic: the same input and secret give byte-identical `sanitized/` and `records.jsonl`. A
+  different secret changes every pseudonym and date offset.
 
 ## Team
 

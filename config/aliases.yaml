@@ -1,0 +1,107 @@
+# Field aliases: a column or JSON key whose name matches one of these holds that kind of value.
+# Matching ignores case, spaces and punctuation. Short aliases match exactly; longer ones match inside a name.
+# English, romanised Hindi and Devanagari spellings are all listed.
+
+patient_name:
+  - patient name
+  - patient
+  - pt name
+  - patient's name
+  - full name
+  - first name
+  - last name
+  - surname
+  - name
+  - naam
+  - beneficiary
+  - beneficiary name
+  - नाम
+relative_name:
+  - relative name
+  - guardian
+  - guardian name
+  - father name
+  - husband name
+  - spouse name
+  - mother name
+  - relation name
+  - pita ka naam
+  - pita pati ka naam
+  - pati ka naam
+  - पिता
+phone:
+  - mobile
+  - mobile no
+  - phone
+  - contact
+  - contact no
+  - cell
+  - telephone
+email:
+  - email
+  - e mail
+  - mail id
+aadhaar:
+  - aadhaar
+  - aadhar
+  - adhar
+  - aadhaar no
+abha:
+  - abha
+  - abha no
+  - abha number
+pan:
+  - pan
+  - payer pan
+  - pan number
+hospital_id:
+  - uhid
+  - mrn
+  - patient id
+  - reg no
+  - registration no
+  - ipd no
+  - ipd
+insurance_id:
+  - pmjay
+  - policy no
+  - insurance id
+  - ayushman
+dob:
+  - dob
+  - date of birth
+  - birth date
+  - janm tithi
+  - janm
+address:
+  - address
+  - street
+  - village
+  - mohalla
+  - tehsil
+  - tahsil
+  - locality
+  - landmark
+  - house
+  - house no
+  - h no
+  - gaon
+  - pata
+  - city
+  - zip
+  - pin
+  - pin code
+  - pincode
+age:
+  - age
+  - age sex
+  - umar
+date:
+  - date
+  - admission date
+  - discharge date
+  - collected on
+  - reported on
+  - registered
+  - reg date
+  - visit date
