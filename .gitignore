@@ -1,0 +1,17 @@
+# Practice and hidden data must never be committed
+dev/
+data/
+input/
+output/
+my_output/
+
+# Secrets and env files
+.env
+*.key
+*secret*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
