@@ -13,7 +13,9 @@ import os
 import sys
 from pathlib import Path
 
-from engine.pipeline import run_pipeline
+# Make the engine importable however Python was started (for example with -I, which ignores the script folder).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from engine.pipeline import run_pipeline  # noqa: E402
 
 
 def main() -> int:
