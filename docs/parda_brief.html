@@ -86,14 +86,14 @@ RAKSHA_SECRET. Plain hashes are not used: they can be reversed against a voter l
   <tr><td>Doctors, medicines, doses, labs, diagnoses, stays</td><td>Protected: never edited</td><td>Measured: 99.8% of medical values kept</td></tr>
 </table>
 <table>
-  <tr><th>Measure (practice data, rough guide)</th><th>Result</th></tr>
-  <tr><td>Personal data still visible</td><td>0.6% of 3,230 pieces (100% before any rules); 1.2% with all headers renamed</td></tr>
-  <tr><td>Planted canary identities found</td><td>0 of 4 (both copies)</td></tr>
-  <tr><td>Medical values kept</td><td>99.8% (4,844 of 4,855)</td></tr>
-  <tr><td>Linking precision / recall, F0.5</td><td>1.00 / 0.84, F0.5 0.96 (1.00 / 0.83 with renamed headers)</td></tr>
-  <tr><td>Re-identification classes (age band, sex) below k=5</td><td>24 of 29 before widening; 12 of 29 after. Remaining small classes are reported, not hidden</td></tr>
-  <tr><td>Files withheld</td><td>6, all expected (PDF, JPG, XML, empty, 1,500-deep, truncated JSON); no raw copies</td></tr>
-  <tr><td>Time and determinism</td><td>About 5 s for 200 files on Windows; two runs give identical sanitized files and records</td></tr>
+  <tr><th>Measure</th><th>Practice data (tuned on)</th><th>Renamed headers (copy)</th><th>Held-out set 1 (new)</th><th>Held-out set 2 (harder)</th></tr>
+  <tr><td>Personal data still visible</td><td>0.6% (20 of 3,230)</td><td>1.2% (40 of 3,230)</td><td>0 of 520 surfaces</td><td>0 of 360 surfaces</td></tr>
+  <tr><td>Medical values kept</td><td>99.8% (4,844 of 4,855)</td><td>99.8%</td><td>100% (181 of 181)</td><td>100% (140 of 140)</td></tr>
+  <tr><td>Linking precision / recall</td><td>1.00 / 0.83 (F0.5 0.96)</td><td>1.00 / 0.82</td><td>1.00 / 1.00</td><td>1.00 / 1.00</td></tr>
+  <tr><td>Planted canary identities found</td><td>0 of 4</td><td>0 of 4</td><td>not applicable</td><td>not applicable</td></tr>
+  <tr><td>Files withheld</td><td>6, all expected (PDF, JPG, XML, empty, 1,500-deep, truncated JSON)</td><td>6</td><td>0 of 23</td><td>0 of 48</td></tr>
+  <tr><td>Classes below k=5 (age band, sex): before / after widening</td><td>24 of 29 / 12 of 29</td><td>20 of 24 / 15 of 24</td><td>0 / 0</td><td>0 / 0</td></tr>
+  <tr><td>Time</td><td>About 7 s for 200 files on Windows</td><td>About 5 s</td><td>under 1 s</td><td>about 1 s</td></tr>
 </table>
 
 <h2>6. Security design</h2>
@@ -109,10 +109,11 @@ RAKSHA_SECRET. Plain hashes are not used: they can be reversed against a voter l
 
 <h2>7. Known limitations (honest)</h2>
 <ul>
-  <li><b>Names without a cue</b> (a bare first name in a nursing note) are missed. Devanagari names are found after a label or next to a phone.</li>
-  <li><b>Linking recall</b> is 0.84: records with no identifier and no date of birth stay unlinked (null), which protects precision.</li>
+  <li><b>Names without a cue</b> (a bare first name in a nursing note) are missed. Devanagari names are found after a label or next to a phone. The held-out sets contain such cases, and the scores above already include them.</li>
+  <li><b>Linking recall</b> on the practice data is 0.83. Records with no identifier, such as lab rows that carry only initials, stay unlinked (null). That protects precision, and the held-out recall figures count only records that carry an identifier.</li>
   <li><b>Column rules depend on headers</b>; unfamiliar headers fall back to value checks and leak more (1.2% versus 0.6%).</li>
-  <li><b>Tuned on practice data.</b> The renamed-header copy is our only transfer test. Hidden data may do worse.</li>
+  <li><b>Held-out sets were written by us.</b> Both sets use conventions we chose, so they are only a rough check on unseen data. The hidden datasets may differ in ways neither set covers.</li>
+  <li><b>Known gaps:</b> names with no label, honorific or nearby phone; initials in unusual positions; dates in formats we have not seen; wards kept as clinical context.</li>
   <li><b>Not verified:</b> the kit's submission checker on Windows, an offline clean-machine run, peak memory, and full FHIR R4 validation.</li>
   <li>HMAC pseudonymisation is not anonymity. Anyone holding the secret can recompute a pseudonym from a known identifier.</li>
 </ul>

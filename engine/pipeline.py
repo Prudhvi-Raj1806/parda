@@ -46,14 +46,15 @@ FHIR_IDENTIFIER_SYSTEM = "urn:parda:pseudonym"
 class Ctx:
     """What a unit (record or document) needs while it is written."""
 
-    __slots__ = ("unit_key", "pid", "widened", "month_first")
+    __slots__ = ("unit_key", "pid", "widened", "month_first", "suppress")
 
     def __init__(self, unit_key: str | None, pid: str | None = None, widened: bool = False,
-                 month_first: bool = False) -> None:
+                 month_first: bool = False, suppress: bool = False) -> None:
         self.unit_key = unit_key
         self.pid = pid
         self.widened = widened
         self.month_first = month_first
+        self.suppress = suppress
 
 
 NO_CTX = Ctx(None)
@@ -81,6 +82,7 @@ class Engine:
         self.resolver = Resolver(self.policy.link_threshold)
         self.pid_of: dict[str, str] = {}          # unit key (rel|loc) -> pseudonym
         self.widened: set[str] = set()            # unit keys whose age band is widened (small class)
+        self.suppressed: set[str] = set()         # unit keys whose district is suppressed (small class)
         self.applied = Counter()                  # entity kind -> count
         self.dates_shifted = 0
         self.ages_banded = 0
@@ -192,47 +194,64 @@ class Engine:
             self.pid_of[f"{unit_key[0]}|{unit_key[1]}"] = pid
 
     def plan_quasi_identifiers(self, units: list[Unit]) -> None:
-        """Age band and gender per patient. A class (age band, gender) with fewer than k patients is widened."""
-        self.risk_summary = {"quasi_identifier": "age band and sex", "k": self.policy.k_anonymity,
-                             "classes": 0, "classes_below_k_before": 0, "classes_below_k_after": 0,
-                             "units_widened": 0}
-        classes: dict[tuple, set[str]] = defaultdict(set)
-        member: dict[str, tuple] = {}
+        """Risk-adaptive generalisation (k-anonymity over distinct patients).
+
+        Quasi-identifier = (age band, sex, district). Steps, each applied only to the records of classes that
+        are still below k:
+          1. widen the age band from the adult band to the wide band (20 years);
+          2. suppress the district (replaced by [DISTRICT]) so the class loses its location.
+        Classes that stay small after both steps are reported, not hidden.
+        """
+        k = self.policy.k_anonymity
+        member: dict[str, tuple] = {}        # unit key -> (band, sex, district)
         for u in units:
-            ages = [v for k, v in u.fields if k == "AGE" and v.strip()]
-            genders = [v.strip().upper()[:1] for k, v in u.fields if k == "GENDER" and v.strip()]
+            ages = [v for kind, v in u.fields if kind == "AGE" and v.strip()]
             if not ages:
                 continue
             m = re.match(r"\s*(\d{1,3})(?!\d)", ages[0])
             if not m:
                 continue
-            band = age_band(int(m.group(1)), self.policy)
-            qi = (band, genders[0] if genders else "")
-            key = self.unit_key(u)
-            member[key] = qi
-            classes[qi].add(self.patient_key(u))
-        below = {qi for qi, pats in classes.items() if len(pats) < self.policy.k_anonymity}
-        for key, qi in member.items():
-            if qi in below:
+            sexes = [v.strip().upper()[:1] for kind, v in u.fields if kind == "GENDER" and v.strip()]
+            member[self.unit_key(u)] = (age_band(int(m.group(1)), self.policy), sexes[0] if sexes else "",
+                                        unit_district(u))
+        units_by_key = {self.unit_key(u): u for u in units if self.unit_key(u) in member}
+
+        def classes_of(state: dict[str, tuple]) -> dict[tuple, set[str]]:
+            out: dict[tuple, set[str]] = defaultdict(set)
+            for key, qi in state.items():
+                out[qi].add(self.patient_key(units_by_key[key]))
+            return out
+
+        before = classes_of(member)
+        below_before = {qi for qi, pats in before.items() if len(pats) < k}
+
+        # Step 1: widen the age band for records in small classes.
+        state = dict(member)
+        for key, (band, sex, district) in member.items():
+            if (band, sex, district) in below_before:
+                state[key] = (widen_band(band, self.policy), sex, district)
                 self.widened.add(key)
-        # After widening, a small class (age band widened to 20 years) can still be small. Those are reported.
-        widened_classes: dict[tuple, set[str]] = defaultdict(set)
-        for u in units:
-            key = self.unit_key(u)
-            if key in member:
-                qi = member[key]
-                if qi in below:
-                    lo_s = qi[0].partition("-")[0]
-                    wide = widen_band(qi[0], self.policy)
-                    widened_classes[(wide, qi[1])].add(self.patient_key(u))
-                else:
-                    widened_classes[qi].add(self.patient_key(u))
-        self.risk_summary.update({
-            "classes": len(classes),
-            "classes_below_k_before": len(below),
-            "classes_below_k_after": sum(1 for pats in widened_classes.values() if len(pats) < self.policy.k_anonymity),
+        after_widen = classes_of(state)
+
+        # Step 2: suppress the district for records whose class is still small.
+        below_widened = {qi for qi, pats in after_widen.items() if len(pats) < k}
+        for key, (band, sex, district) in state.items():
+            if (band, sex, district) in below_widened and district:
+                self.suppressed.add(key)
+                state[key] = (band, sex, "")
+        after = classes_of(state)
+        below_after = {qi for qi, pats in after.items() if len(pats) < k}
+
+        self.risk_summary = {
+            "quasi_identifier": "age band, sex and district",
+            "k": k,
+            "classes": len(before),
+            "classes_below_k_before": len(below_before),
+            "classes_below_k_after_widening": len(below_widened),
+            "classes_below_k_after": len(below_after),
             "units_widened": len(self.widened),
-        })
+            "units_district_suppressed": len(self.suppressed),
+        }
 
     def unit_key(self, u: Unit) -> str:
         return f"{u.rel}|{u.loc}"
@@ -259,6 +278,10 @@ class Engine:
             result = apply_spans(text, spans)
             self.applied.update(result.applied)
             return result.text
+        if ctx.suppress:
+            for m in DISTRICT_RX.finditer(text):
+                spans.append(Span(m.start(), m.end(), "DISTRICT", P_DATASET, replacement="[DISTRICT]",
+                                  detector="suppress"))
         clinical = clinical_spans(text, self.terms)
         # A clinical term (a medicine or diagnosis from config) is never a name, even when a name pattern
         # matches it next to a phone or label. Identifiers are not affected.
@@ -345,6 +368,17 @@ class Engine:
                 return f"[{kind}]"
             return node
         return self.transform_value(node, kind, ctx)
+
+
+DISTRICT_RX = re.compile(r"(?<![a-z])(" + "|".join(re.escape(d) for d in sorted(UP_DISTRICTS, key=len, reverse=True))
+                         + r")(?![a-z])", re.IGNORECASE)
+
+
+def unit_district(u: "Unit") -> str:
+    """The first district named in a record (a location, not an identifier)."""
+    text = " ".join(str(v) for _, v in u.fields if isinstance(v, str)) + " " + u.text
+    m = DISTRICT_RX.search(text)
+    return m.group(1).lower() if m else ""
 
 
 def extension_kind(node: dict) -> str | None:
@@ -558,7 +592,8 @@ def render_file(f: InputFile, units: list[Unit], eng: Engine, out_rel: str) -> O
             for j, cell in enumerate(row):
                 kind = kinds[j] if j < len(kinds) else None
                 kind = kind or value_kind(cell)
-                ctx = Ctx(key, pid, widened, month_first[j] if j < len(month_first) else False)
+                ctx = Ctx(key, pid, widened, month_first[j] if j < len(month_first) else False,
+                          suppress=f"{f.rel}|{loc}" in eng.suppressed)
                 cells.append(eng.transform_value(cell, kind, ctx))
             if pid and not any(pid in c for c in cells):
                 # No name or hospital-number column was recognised: the pseudonym takes the place of the
@@ -576,7 +611,7 @@ def render_file(f: InputFile, units: list[Unit], eng: Engine, out_rel: str) -> O
         doc_pid = eng.pid(f.rel, "doc")
         if f.kind == "fhir" or is_json_doc(data):
             key = doc_pid or f"{f.rel}|doc"
-            ctx = Ctx(key, doc_pid, f"{f.rel}|doc" in eng.widened)
+            ctx = Ctx(key, doc_pid, f"{f.rel}|doc" in eng.widened, suppress=f"{f.rel}|doc" in eng.suppressed)
             out = eng.out_node(data, None, ctx)
             if f.kind == "fhir" and isinstance(out, dict) and out.get("resourceType") == "Patient" and doc_pid:
                 out.setdefault("identifier", []).append({"system": FHIR_IDENTIFIER_SYSTEM, "value": doc_pid})
@@ -592,7 +627,8 @@ def render_file(f: InputFile, units: list[Unit], eng: Engine, out_rel: str) -> O
                         loc = f"/{pointer_escape(k)}/{i}"
                         pid = eng.pid(f.rel, loc)
                         key = pid or f"{f.rel}|{loc}"
-                        ctx = Ctx(key, pid, f"{f.rel}|{loc}" in eng.widened)
+                        ctx = Ctx(key, pid, f"{f.rel}|{loc}" in eng.widened,
+                                  suppress=f"{f.rel}|{loc}" in eng.suppressed)
                         items.append(eng.out_node(item, None, ctx))
                         records.append(record(f.rel, out_rel, loc, pid))
                     out[eng.sanitize_text(k, NO_CTX, structural=True)] = items
@@ -602,7 +638,8 @@ def render_file(f: InputFile, units: list[Unit], eng: Engine, out_rel: str) -> O
             data_text = json.dumps(out, ensure_ascii=False, indent=2) + "\n"
     else:
         pid = eng.pid(f.rel, "doc")
-        ctx = Ctx(pid or f"{f.rel}|doc", pid, f"{f.rel}|doc" in eng.widened)
+        ctx = Ctx(pid or f"{f.rel}|doc", pid, f"{f.rel}|doc" in eng.widened,
+                  suppress=f"{f.rel}|doc" in eng.suppressed)
         body = eng.sanitize_text(f.text, ctx)
         data_text = (f"Patient ID: {pid}\n" + body) if pid else body
         records.append(record(f.rel, out_rel, "doc", pid))
