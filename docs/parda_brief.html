@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <title>Parda: Project Brief</title>
 <style>
-  @page { size: A4; margin: 13mm 14mm 11mm 14mm; }
-  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 9.6pt; line-height: 1.33; color: #111; margin: 0; }
+  @page { size: A4; margin: 11mm 13mm 10mm 13mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 9.0pt; line-height: 1.28; color: #111; margin: 0; }
   h1 { font-size: 15pt; margin: 0 0 2pt 0; }
   h2 { font-size: 10.6pt; margin: 8pt 0 3pt 0; border-bottom: 0.6pt solid #888; padding-bottom: 1pt; }
   p { margin: 2pt 0 4pt 0; }
   .meta { color: #444; font-size: 8.4pt; margin-bottom: 4pt; }
   ul { margin: 2pt 0 4pt 14pt; padding: 0; }
   li { margin: 1pt 0; }
-  table { border-collapse: collapse; width: 100%; font-size: 8.6pt; margin: 3pt 0 4pt 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 7.9pt; margin: 3pt 0 4pt 0; }
   th, td { border: 0.5pt solid #999; padding: 2pt 4pt; vertical-align: top; text-align: left; }
   th { background: #eee; }
   pre { font-family: Consolas, "Courier New", monospace; font-size: 7.4pt; line-height: 1.2; background: #f5f5f5; border: 0.5pt solid #ccc; padding: 4pt 6pt; margin: 3pt 0 4pt 0; white-space: pre; }
@@ -80,19 +80,22 @@ RAKSHA_SECRET. Plain hashes are not used: they can be reversed against a voter l
   <tr><th style="width:24%">Field</th><th style="width:36%">Transformation</th><th>Cost and benefit</th></tr>
   <tr><td>Names (patient, relative)</td><td>Pseudonym in the record, or [PATIENT_NAME] / [RELATIVE_NAME]</td><td>Direct identifiers gone; linking stays possible</td></tr>
   <tr><td>Dates (admission, discharge, DOB)</td><td>One nonzero offset of 30 to 365 days per patient, format kept</td><td>Stay lengths exact (a 2-day stay stays 2 days); absolute dates no longer match a register</td></tr>
-  <tr><td>Age</td><td>10-year adult bands, 5-year for minors, always containing the true age</td><td>Coarser than exact age; classes below k=5 widen to 20 years</td></tr>
+  <tr><td>Age</td><td>10-year adult bands, 5-year for minors, always containing the true age</td><td>Coarser than exact age; small classes widen to 20 years</td></tr>
   <tr><td>Village, house, locality, landmark, PIN</td><td>Removed</td><td>Loses small-area detail, the most identifying field in the data</td></tr>
-  <tr><td>District, hospital ward</td><td>Kept</td><td>Coarse location and clinical context are kept on purpose</td></tr>
-  <tr><td>Doctors, medicines, doses, labs, diagnoses, stays</td><td>Protected: never edited</td><td>Measured: 99.8% of medical values kept</td></tr>
+  <tr><td>District</td><td>Kept, except in small age-and-sex groups, where it is replaced by [DISTRICT]</td><td>Removes the location that identified most people in the attack; 75 district mentions lost in the practice data</td></tr>
+  <tr><td>Hospital ward</td><td>Kept</td><td>Clinical context is kept on purpose</td></tr>
+  <tr><td>Doctors, medicines, doses, labs, diagnoses, stays</td><td>Protected: never edited</td><td>Measured: 98.5% of medical values kept on practice data (the loss is district names); 100% on both held-out sets</td></tr>
 </table>
 <table>
   <tr><th>Measure</th><th>Practice data (tuned on)</th><th>Renamed headers (copy)</th><th>Held-out set 1 (new)</th><th>Held-out set 2 (harder)</th></tr>
   <tr><td>Personal data still visible</td><td>0.6% (20 of 3,230)</td><td>1.2% (40 of 3,230)</td><td>0 of 520 surfaces</td><td>0 of 360 surfaces</td></tr>
-  <tr><td>Medical values kept</td><td>99.8% (4,844 of 4,855)</td><td>99.8%</td><td>100% (181 of 181)</td><td>100% (140 of 140)</td></tr>
+  <tr><td>Medical values kept</td><td>98.5% (4,780 of 4,855)</td><td>99.4%</td><td>100% (181 of 181)</td><td>100% (140 of 140)</td></tr>
+  <tr><td>Patients re-identified by our attacker (simplified; raw input: 100%)</td><td>12.5% (6 of 48), down from 25% before district-aware k-anonymity</td><td>not run</td><td>not run</td><td>not run</td></tr>
+  <tr><td>Targeted attack success (known visits or conditions)</td><td>0 of 10 hits</td><td>0 of 10</td><td>not run</td><td>not run</td></tr>
   <tr><td>Linking precision / recall</td><td>1.00 / 0.83 (F0.5 0.96)</td><td>1.00 / 0.82</td><td>1.00 / 1.00</td><td>1.00 / 1.00</td></tr>
   <tr><td>Planted canary identities found</td><td>0 of 4</td><td>0 of 4</td><td>not applicable</td><td>not applicable</td></tr>
   <tr><td>Files withheld</td><td>6, all expected (PDF, JPG, XML, empty, 1,500-deep, truncated JSON)</td><td>6</td><td>0 of 23</td><td>0 of 48</td></tr>
-  <tr><td>Classes below k=5 (age band, sex): before / after widening</td><td>24 of 29 / 12 of 29</td><td>20 of 24 / 15 of 24</td><td>0 / 0</td><td>0 / 0</td></tr>
+  <tr><td>Classes below k=5 (age band, sex, district): before / after widening / after suppression</td><td>42 of 46 / 35 / 12</td><td>26 of 30 / 23 / 16</td><td>0 / 0 / 0</td><td>0 / 0 / 0</td></tr>
   <tr><td>Time</td><td>About 7 s for 200 files on Windows</td><td>About 5 s</td><td>under 1 s</td><td>about 1 s</td></tr>
 </table>
 
@@ -102,8 +105,7 @@ RAKSHA_SECRET. Plain hashes are not used: they can be reversed against a voter l
   Keys are derived per purpose (pseudonyms, dates), so one key never serves two jobs.</li>
   <li>stdout and errors show counts, exception classes and input hashes only. No temporary files; the registry and profiles
   live in memory until the gate passes.</li>
-  <li>Each file's bytes are verified before writing (format, residual identifiers, clinical fingerprints, references, path).
-  Unverified output is never published. The input is re-hashed, and the run stops if it changed.</li>
+  <li>Each file is verified before writing; unverified output is never published, and the input is re-hashed.</li>
   <li>Quarantine is withholding, not copying: unreadable, binary, malformed or unsafe files appear in the report with a reason.</li>
 </ul>
 
@@ -112,10 +114,10 @@ RAKSHA_SECRET. Plain hashes are not used: they can be reversed against a voter l
   <li><b>Names without a cue</b> (a bare first name in a nursing note) are missed. Devanagari names are found after a label or next to a phone. The held-out sets contain such cases, and the scores above already include them.</li>
   <li><b>Linking recall</b> on the practice data is 0.83. Records with no identifier, such as lab rows that carry only initials, stay unlinked (null). That protects precision, and the held-out recall figures count only records that carry an identifier.</li>
   <li><b>Column rules depend on headers</b>; unfamiliar headers fall back to value checks and leak more (1.2% versus 0.6%).</li>
+  <li><b>Re-identification risk remains.</b> 12 of 46 classes stay below k=5 even after widening and district suppression, and 12.5% of practice patients are still identified by our simplified attacker. The kit's own attacker has not been run, and the held-out sets do not exercise the k-anonymity step.</li>
   <li><b>Held-out sets were written by us.</b> Both sets use conventions we chose, so they are only a rough check on unseen data. The hidden datasets may differ in ways neither set covers.</li>
   <li><b>Known gaps:</b> names with no label, honorific or nearby phone; initials in unusual positions; dates in formats we have not seen; wards kept as clinical context.</li>
   <li><b>Not verified:</b> the kit's submission checker on Windows, an offline clean-machine run, peak memory, and full FHIR R4 validation.</li>
-  <li>HMAC pseudonymisation is not anonymity. Anyone holding the secret can recompute a pseudonym from a known identifier.</li>
 </ul>
 
 </body>
