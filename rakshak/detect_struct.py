@@ -33,6 +33,8 @@ HEADER_RULES: list[tuple[str, re.Pattern]] = [
     ("INSURANCE_ID", re.compile(r"pmjay|policyno|insuranceid|ayushman|^policy$")),
     ("MRN", re.compile(r"uhid|^mrn|mrno|ipdno|^ipd$|patientid|^regno|registrationno|regnumber")),
     # District and city are kept: they are the generalised location the policy allows.
+    ("AGE", re.compile(r"^age$|agesex|^umar$|^ageyrs$")),
+    ("DATE", re.compile(r"date|admission|discharge|collected|reported|registered|visit")),
     ("ADDRESS", re.compile(r"address|street|village|mohalla|tehsil|tahsil|locality|landmark|"
                            r"housenumber|^house$|^hno$|^gaon$|^pata$|^thana$|^line$|"
                            r"^zip$|pincode|^pin$|^city$")),

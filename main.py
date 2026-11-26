@@ -2,11 +2,11 @@
 """Secret Wards privacy firewall: entry point.
 
 Two passes, offline, standard library only:
-  pass 1 (read only): learn names and identifiers from structured fields, labelled text and
-                      phone-adjacent candidates into an in-memory registry;
-  pass 2 (write):     sanitise every file: column and key rules, identifier shapes, the registry
-                      replaced everywhere (values, keys, file names, base64), then write
-                      sanitized/, report.json and records.jsonl.
+  pass 1 (read only): learn names, addresses and dates from structured fields and labelled text into an
+                      in-memory registry; collect strong identifiers per record and link records (rakshak/link.py);
+  pass 2 (write):     sanitise every file: column and key rules, identifier shapes, the registry replaced everywhere
+                      (values, keys, file names, base64), the patient pseudonym written into each linked record,
+                      then sanitized/, report.json and records.jsonl.
 
 Files that cannot be parsed are quarantined, never copied. Nothing personal is printed or logged.
 Usage: python main.py --input <input dir> --output <empty output dir>   (needs RAKSHA_SECRET)
@@ -29,6 +29,7 @@ from pathlib import Path
 from rakshak.detect_struct import classify_header, redact_text, placeholder
 from rakshak.detect_text import find_names, looks_like_person, redact_honorific_singles
 from rakshak.hidden import decode_b64_text, encode_b64_text, scrub_rel_path
+from rakshak.link import Linker, extract_keys, name_dob_keys
 from rakshak.registry import Registry, UP_DISTRICTS
 
 
@@ -52,7 +53,11 @@ NAME_KINDS = {"PATIENT_NAME", "RELATIVE_NAME"}
 # Keys that show an object describes a person, so its bare "name" key is the person's name.
 PERSON_CONTEXT = {"DOB", "MRN", "AADHAAR", "ABHA_NUMBER", "PAN", "EMAIL", "INSURANCE_ID"}
 
-REGISTRY = Registry()  # filled in pass 1, read-only in pass 2
+REGISTRY = Registry()   # filled in pass 1, read-only in pass 2
+LINKER = Linker()       # filled in pass 1 (strong identifiers), read-only in pass 2
+CURRENT_PID: str | None = None  # the patient pseudonym of the unit being written
+CURRENT_UNIT_KEY: str | None = None  # fixes this unit's date shift (pseudonym, or the record)
+CURRENT_MONTH_FIRST = False  # the column header says MM/DD, so its dates are month-first
 
 
 # --------------------------------------------------------------------------- pseudonyms & dates
@@ -95,6 +100,61 @@ class Stats:
     suppressed = 0
 
 
+DATE_DMY_TXT = re.compile(r"(?<![\d/-])(\d{1,2})([/-])(\d{1,2})\2(\d{4})(?![\d/-])")
+DATE_ISO_TXT = re.compile(r"(?<![\d-])(\d{4})-(\d{2})-(\d{2})(?![\d-])")
+
+
+def _shift_one(y: int, m: int, d: int, key: str) -> dt.date | None:
+    try:
+        return shift_date(dt.date(y, m, d), key)
+    except ValueError:
+        return None
+
+
+def shift_dates_in_text(text: str, key: str, month_first_hint: bool = False) -> tuple[str, int]:
+    """Move every date in the text by the unit's own offset. Format and separators are kept, so a
+    9-day stay is still a 9-day stay. Returns (text, number of dates shifted)."""
+    count = 0
+
+    def dmy(m: re.Match) -> str:
+        nonlocal count
+        a, sep, b, y = int(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4))
+        if a > 12 and b <= 12:
+            month_first = False  # the first number cannot be a month: day-first
+        elif b > 12 and a <= 12:
+            month_first = True   # the second number cannot be a month: month-first
+        else:
+            month_first = month_first_hint
+        day, mon = (b, a) if month_first else (a, b)
+        shifted = _shift_one(y, mon, day, key)
+        if shifted is None:
+            return "[DATE]"
+        count += 1
+        if month_first:
+            return f"{shifted.month:02d}{sep}{shifted.day:02d}{sep}{shifted.year}"
+        return f"{shifted.day:02d}{sep}{shifted.month:02d}{sep}{shifted.year}"
+
+    def iso(m: re.Match) -> str:
+        nonlocal count
+        shifted = _shift_one(int(m.group(1)), int(m.group(2)), int(m.group(3)), key)
+        if shifted is None:
+            return "[DATE]"
+        count += 1
+        return shifted.isoformat()
+
+    text = DATE_DMY_TXT.sub(dmy, text)
+    text = DATE_ISO_TXT.sub(iso, text)
+    return text, count
+
+
+def clean_age(value: str) -> str:
+    """Age becomes the 5-year band that contains it: '48' -> '45-49', '65/F' -> '65-69/F'."""
+    m = re.match(r"\s*(\d{1,3})(?!\d)", value)
+    if not m:
+        return "[AGE]"
+    return age_band(int(m.group(1))) + value[m.end():]
+
+
 PATH_ID_RX = re.compile(r"(?<=[A-Za-z]_)\d{5,8}(?=[\\/_.]|$)")
 
 
@@ -105,6 +165,9 @@ def clean_text(text: str) -> str:
     text, n_names = REGISTRY.replace(text)
     text, n_hon = redact_honorific_singles(text)
     text, n_shapes = redact_text(text)
+    if CURRENT_UNIT_KEY:
+        text, n_dates = shift_dates_in_text(text, CURRENT_UNIT_KEY)
+        Stats.generalized += n_dates
     Stats.identifiers += n_names + n_hon + n_shapes
     return text
 
@@ -144,13 +207,27 @@ DOCTOR_PREFIX = re.compile(r"^\s*(?:Dr|Doctor|Prof)\.?\s", re.IGNORECASE)
 
 
 def clean_str(value: str, kind: str | None) -> str:
-    """One string. A column or key that holds `kind` is replaced whole; base64 is decoded and re-encoded."""
+    """One string. A column or key that holds `kind` is replaced whole; a patient name becomes the
+    unit's pseudonym; base64 is decoded and re-encoded."""
     if value.strip() == "":
         return value
     if kind in NAME_KINDS and DOCTOR_PREFIX.match(value):
         kind = None  # "Dr. Ramesh Srivastava" is a doctor: keep the title, scrub only what the registry knows
+    if kind == "AGE":
+        Stats.generalized += 1
+        return clean_age(value)
+    if kind in ("DOB", "DATE"):
+        if CURRENT_UNIT_KEY:
+            shifted, n = shift_dates_in_text(value, CURRENT_UNIT_KEY, CURRENT_MONTH_FIRST)
+            Stats.generalized += n
+            if n:
+                return shifted
+        Stats.identifiers += 1
+        return placeholder(kind)
     if kind is not None:
         Stats.identifiers += 1
+        if kind == "PATIENT_NAME" and CURRENT_PID:
+            return CURRENT_PID  # the name field carries the pseudonym inside the record
         return placeholder(kind)
     text = decode_b64_text(value)
     if text is not None:
@@ -189,6 +266,8 @@ def clean_value(v, kind: str | None = None):
     if isinstance(v, bool) or v is None:
         return v
     if isinstance(v, (int, float)):
+        if kind == "AGE":
+            return clean_age(str(v))
         # A number under an identifier key (Aadhaar as a JSON number) is still an identifier.
         if kind is not None and kind not in ("ADDRESS",):
             Stats.identifiers += 1
@@ -211,13 +290,22 @@ def clean_value(v, kind: str | None = None):
     return v
 
 
-# --------------------------------------------------------------------------- linkage
-def link_records(_record_text: str):
-    """Return a canonical patient key for a record, or None. TODO(team): lane 4 (strong IDs, union-find)."""
-    return None
+def clean_unit(item, pid: str | None, unit_key: str):
+    """Clean one record. Its patient name fields carry the pseudonym; its dates use its shift."""
+    global CURRENT_PID, CURRENT_UNIT_KEY
+    CURRENT_PID, CURRENT_UNIT_KEY = pid, unit_key
+    try:
+        return clean_value(item)
+    finally:
+        CURRENT_PID, CURRENT_UNIT_KEY = None, None
 
 
 # --------------------------------------------------------------------------- pass 1: collect
+def decoded_text(value: str) -> str:
+    """The text of a string, or the decoded text of a base64 attachment."""
+    return decode_b64_text(value) or value
+
+
 def collect_csv(text: str, delimiter: str) -> None:
     rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
     if len(rows) < 2:
@@ -231,18 +319,11 @@ def collect_csv(text: str, delimiter: str) -> None:
                 REGISTRY.add(cell, kind)
             elif kind == "ADDRESS" and cell.strip():
                 add_address(cell)
-            elif kind == "DOB" and cell.strip():
-                REGISTRY.add_literal(cell, "DOB")  # the same date may appear in free text
             for name, nk in find_names(decoded_text(cell)):  # base64 attachments in cells
                 REGISTRY.add(name, nk)
             address_in_text(decoded_text(cell))
         for name, kind in find_names(" | ".join(row)):
             REGISTRY.add(name, kind)
-
-
-def decoded_text(value: str) -> str:
-    """The text of a string, or the decoded text of a base64 attachment."""
-    return decode_b64_text(value) or value
 
 
 def collect_json(node, kind: str | None = None) -> None:
@@ -259,15 +340,11 @@ def collect_json(node, kind: str | None = None) -> None:
     elif isinstance(node, list):
         for x in node:
             collect_json(x, kind)  # a list under a PII key holds that kind (e.g. address lines)
-    elif isinstance(node, (int, float)) and kind == "DOB":
-        REGISTRY.add_literal(str(node), "DOB")
     elif isinstance(node, str):
         if kind in NAME_KINDS:
             REGISTRY.add(node, kind)
         elif kind == "ADDRESS":
             add_address(node)
-        elif kind == "DOB":
-            REGISTRY.add_literal(node, "DOB")
         for name, nk in find_names(decoded_text(node)):
             REGISTRY.add(name, nk)
         address_in_text(decoded_text(node))
@@ -277,6 +354,44 @@ def collect_text(text: str) -> None:
     address_in_text(text)
     for name, kind in find_names(text):
         REGISTRY.add(name, kind)
+
+
+# --------------------------------------------------------------------------- units and linkage
+def _pointer(k: str) -> str:
+    return k.replace("~", "~0").replace("/", "~1")
+
+
+def is_json_doc(data) -> bool:
+    """A FHIR Bundle or a single object is one record; a dict of record lists is one record per item."""
+    return not isinstance(data, dict) or data.get("resourceType") == "Bundle" or not any(
+        isinstance(v, list) and v and all(isinstance(x, dict) for x in v) for v in data.values())
+
+
+def iter_units(ext: str, text: str, delimiter: str):
+    """Yield (loc, text) for each record of a file, with the same locators records.jsonl uses."""
+    if ext in (".csv", ".tsv"):
+        rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
+        for i, row in enumerate(rows[1:]):
+            yield f"row:{i}", delimiter.join(row)
+    elif ext == ".json":
+        data = json.loads(text)
+        if is_json_doc(data):
+            yield "doc", text
+        else:
+            for k, v in data.items():
+                if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+                    for i, item in enumerate(v):
+                        yield f"/{_pointer(k)}/{i}", json.dumps(item, ensure_ascii=False)
+    else:
+        yield "doc", text
+
+
+def link_pass(good) -> None:
+    for _, rel, ext, text in good:
+        delim = "\t" if ext == ".tsv" else ","
+        for loc, unit_text in iter_units(ext, text, delim):
+            LINKER.add_unit((rel, loc), extract_keys(unit_text))
+    LINKER.finalize(pseudonym)
 
 
 # --------------------------------------------------------------------------- pass 2: write
@@ -293,7 +408,8 @@ def decode(raw: bytes) -> str | None:
     return None
 
 
-def process_csv(text: str, delimiter: str, rel: str, records: list) -> str:
+def process_csv(text: str, delimiter: str, rel_in: str, out_rel: str, records: list) -> str:
+    global CURRENT_PID, CURRENT_UNIT_KEY, CURRENT_MONTH_FIRST
     rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter))
     if not rows:
         return ""
@@ -302,38 +418,65 @@ def process_csv(text: str, delimiter: str, rel: str, records: list) -> str:
     w = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
     w.writerow([clean_text(h) for h in header])
     kinds = [classify_header(h) for h in header]  # a column's name decides what it holds
+    month_first = ["MM/DD" in h.upper() for h in header]  # 'DOB (MM/DD/YYYY)' is US-style
     for i, row in enumerate(body):
-        key = link_records(delimiter.join(row))
-        pid = pseudonym(key) if key else None
-        # TODO(team): write pid into the row's patient column so it appears INSIDE the record
-        w.writerow([clean_str(c, kinds[j] if j < len(kinds) else None) for j, c in enumerate(row)])
-        records.append({"file": f"sanitized/{rel}", "loc": f"row:{i}", "patient": pid})
+        pid = LINKER.pid((rel_in, f"row:{i}"))
+        CURRENT_PID = pid
+        CURRENT_UNIT_KEY = pid or f"{rel_in}|row:{i}"
+        try:
+            cleaned = []
+            for j, c in enumerate(row):
+                CURRENT_MONTH_FIRST = month_first[j] if j < len(month_first) else False
+                cleaned.append(clean_str(c, kinds[j] if j < len(kinds) else None))
+        finally:
+            CURRENT_PID = None
+            CURRENT_UNIT_KEY = None
+            CURRENT_MONTH_FIRST = False
+        w.writerow(cleaned)
+        records.append({"file": f"sanitized/{out_rel}", "loc": f"row:{i}", "patient": pid})
         Stats.records += 1
         Stats.linked += pid is not None
     return buf.getvalue()
 
 
-def process_json(data, rel: str, records: list) -> str:
-    is_doc = not isinstance(data, dict) or data.get("resourceType") == "Bundle" or not any(
-        isinstance(v, list) and v and all(isinstance(x, dict) for x in v) for v in data.values())
-    if is_doc:  # FHIR Bundle or single object: one record for the whole file
-        records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": None})
+def process_json(data, rel_in: str, out_rel: str, records: list) -> str:
+    if is_json_doc(data):  # FHIR Bundle or single object: one record for the whole file
+        pid = LINKER.pid((rel_in, "doc"))
+        records.append({"file": f"sanitized/{out_rel}", "loc": "doc", "patient": pid})
         Stats.records += 1
-    else:
-        for k, v in data.items():
-            if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
-                for i, _ in enumerate(v):
-                    pointer_key = k.replace("~", "~0").replace("/", "~1")
-                    records.append({"file": f"sanitized/{rel}", "loc": f"/{pointer_key}/{i}", "patient": None})
-                    Stats.records += 1
-    # TODO(team): FHIR must stay a valid R4 Bundle whose references resolve
-    return json.dumps(clean_value(data), ensure_ascii=False, indent=2) + "\n"
+        Stats.linked += pid is not None
+        # TODO(team): FHIR must stay a valid R4 Bundle whose references resolve
+        return json.dumps(clean_unit(data, pid, pid or f"{rel_in}|doc"), ensure_ascii=False, indent=2) + "\n"
+    person_here = any(classify_header(k, in_json=True) in PERSON_CONTEXT for k in data)
+    out = {}
+    for k, v in data.items():
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            items = []
+            for i, item in enumerate(v):
+                loc = f"/{_pointer(k)}/{i}"
+                pid = LINKER.pid((rel_in, loc))
+                records.append({"file": f"sanitized/{out_rel}", "loc": loc, "patient": pid})
+                Stats.records += 1
+                Stats.linked += pid is not None
+                items.append(clean_unit(item, pid, pid or f"{rel_in}|{loc}"))
+            out[clean_text(k)] = items
+        else:
+            out[clean_text(k)] = clean_value(v, key_kind(k, person_here, v))
+    return json.dumps(out, ensure_ascii=False, indent=2) + "\n"
 
 
-def process_text(text: str, rel: str, records: list) -> str:
-    records.append({"file": f"sanitized/{rel}", "loc": "doc", "patient": None})
+def process_text(text: str, rel_in: str, out_rel: str, records: list) -> str:
+    pid = LINKER.pid((rel_in, "doc"))
+    records.append({"file": f"sanitized/{out_rel}", "loc": "doc", "patient": pid})
     Stats.records += 1
-    return clean_text(text)
+    Stats.linked += pid is not None
+    global CURRENT_UNIT_KEY
+    CURRENT_UNIT_KEY = pid or f"{rel_in}|doc"
+    try:
+        body = clean_text(text)
+    finally:
+        CURRENT_UNIT_KEY = None
+    return (f"Patient ID: {pid}\n" + body) if pid else body
 
 
 def peak_rss_mb() -> float:
@@ -355,6 +498,10 @@ def main() -> int:
     san = out / "sanitized"
     san.mkdir(parents=True, exist_ok=True)
     sys.setrecursionlimit(5000)
+    if not SECRET:
+        # Refuse to run: pseudonyms and date shifts would be keyed with an empty secret.
+        print("error: RAKSHA_SECRET is not set", file=sys.stderr)
+        return 2
 
     # Read every file once: decide quarantine, keep the decoded text for both passes.
     entries, good = [], []  # good: (entry, rel, ext, text)
@@ -380,7 +527,7 @@ def main() -> int:
             reason = str(exc) if isinstance(exc, ValueError) and str(exc).isidentifier() else type(exc).__name__
             entry.update(output=None, status="quarantined", reason=reason)
 
-    # Pass 1: learn the registry (read only).
+    # Pass 1: learn the registry and the strong identifiers (read only).
     for _, _, ext, text in good:
         if ext in (".csv", ".tsv"):
             collect_csv(text, "\t" if ext == ".tsv" else ",")
@@ -388,6 +535,7 @@ def main() -> int:
             collect_json(json.loads(text))
         else:
             collect_text(text)
+    link_pass(good)
 
     # Pass 2: sanitise and write.
     records = []
@@ -402,11 +550,11 @@ def main() -> int:
                 out_rel = f"{stem}__{tag}.{suffix}" if dot else f"{out_rel}__{tag}"
             used_paths.add(out_rel)
             if ext in (".csv", ".tsv"):
-                result = process_csv(text, "\t" if ext == ".tsv" else ",", out_rel, records)
+                result = process_csv(text, "\t" if ext == ".tsv" else ",", rel, out_rel, records)
             elif ext == ".json":
-                result = process_json(json.loads(text), out_rel, records)
+                result = process_json(json.loads(text), rel, out_rel, records)
             else:
-                result = process_text(text, out_rel, records)
+                result = process_text(text, rel, out_rel, records)
             dest = san / out_rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(result, encoding="utf-8", newline="")
