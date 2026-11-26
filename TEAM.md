@@ -1,6 +1,8 @@
-# Team plan: Secret Wards (Track 3)
+# Team plan: Parda (Track 3, Secret Wards)
 
-Team: Prudhvi, Prahlad, Sanskar. Deadline: 2:00 AM IST. Only the last commit on `main` at the deadline is scored.
+Team: the collectors (Prudhvi, Prahlad, Sanskar). Prahlad and Sanskar are helping on Parda (Track 3).
+Submission deadline: 8:05 PM IST. Only the last commit on `main` at the deadline is scored.
+Current status and open items: see README.md (Limitations) and docs/parda_brief.html.
 
 Read the competition brief's submission format (`raksha.toml`, `report.json`, `records.jsonl`, and the
 `validate_output.py` checker) before writing code. The skeleton in `main.py` already writes this layout.

@@ -26,6 +26,8 @@ python tests/test_units.py        # unit tests: ingestion, detection, linkage, p
 python tests/test_pipeline.py     # end-to-end tests on invented data
 python tools/benchmark.py --input path/to/input     # time and determinism (needs RAKSHA_SECRET)
 python tools/make_variant.py --input path/to/input --output path/to/copy   # changed-format copy for testing
+python tools/demo.py                          # live demo: cross-script match, rejected false merge, preserved dose
+python tools/attack.py --release path/to/output --input path/to/input --truth T --registry R --facts F   # simplified privacy attacker
 ```
 
 ## Output

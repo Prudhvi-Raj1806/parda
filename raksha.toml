@@ -1,4 +1,4 @@
 [submission]
-name  = "parda"               # project name; the team name is set on the organizers' form
+name  = "the collectors"      # team name as registered with the organizers
 setup = "pip install -r requirements.txt"                    # run once, internet allowed
 run   = "python main.py --input {input} --output {output}"   # run with NO internet
