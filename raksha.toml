@@ -1,4 +1,4 @@
 [submission]
-name  = "secret-wards-team"   # replace with the team name registered with organizers
+name  = "secret-wards-team"
 setup = "pip install -r requirements.txt"                    # run once, internet allowed
 run   = "python main.py --input {input} --output {output}"   # run with NO internet

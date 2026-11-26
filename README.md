@@ -1,34 +1,37 @@
-# Secret Wards: offline privacy firewall for synthetic hospital records
+# Starter skeleton
 
-Yugaantar 2026 · DevForge, Track 3. A CPU-only, LLM-free pipeline that removes personal
-information from synthetic Indian hospital records (English, Hindi, Hinglish), keeps medical data
-intact, links the same patient across files and languages, and leaks nothing.
-
-## Status
-
-Skeleton only. `main.py` writes the required output layout and quarantines every input file, so it
-never copies raw data. Detection, linkage and privacy steps are still to be built.
-
-## Setup
+Copy this folder's contents to the root of **your own** repository and build from there.
 
 ```bash
-pip install -r requirements.txt
-export RAKSHA_SECRET="$(python -c 'import secrets; print(secrets.token_hex(32))')"   # keep private
-python main.py --input path/to/input --output path/to/output
+RAKSHA_SECRET=practice python3 main.py --input ../dev/input --output ../my_output
 ```
 
-On Windows PowerShell, set the variable with `$env:RAKSHA_SECRET = "..."`.
+## What it already does right
 
-## Output contract
+| ✅ | Done for you |
+|---|---|
+| reads every file in a fixed order | deterministic output |
+| decodes UTF-8, UTF-8-BOM, UTF-16 and cp1252 | writes UTF-8 |
+| keeps CSV as CSV and JSON as JSON | same delimiter, header and structure |
+| quarantines PDF, images, XML, empty and broken JSON files | never copies them raw |
+| writes `report.json` | SHA-256 per file, honest counts, timing, memory |
+| writes `records.jsonl` | correct `row:N`, `/json/pointer` and `doc` locators |
+| `pseudonym()` | keyed HMAC fake IDs (`PSN-XXXXXX`) from `RAKSHA_SECRET` |
+| `date_shift_days()`, `shift_date()`, `age_band()` | per-patient date shifting and age bands |
+| prints only counts | stdout, stderr and logs are scanned for PII |
 
-`output/` gets `sanitized/` (same folders and formats as the input), `report.json` (SHA-256 of each
-input file, counts, timing) and `records.jsonl` (record to fake patient ID). See the competition brief
-for the full contract. Run the organizers' `validate_output.py` before submitting.
+## What it does NOT do (that's the challenge)
 
-## Team
+Search `main.py` for `TODO(team)`:
 
-See [TEAM.md](TEAM.md) for the task split.
+1. real **detection**: column awareness, Hindi/Hinglish names, honorifics, relatives, the meaning traps;
+2. **hidden places**: file names, headers, JSON keys, metadata, base64 attachments;
+3. **linking** patients across files and scripts (`link_records` returns `None` for now);
+4. **quasi-identifiers**: date shifting, age bands, location generalisation, rare-value suppression;
+5. writing the fake ID **inside** each cleaned record;
+6. keeping FHIR a valid R4 Bundle.
 
-## Models
+As shipped it scores about **8 / 100** on the practice data with the official evaluator.
+Run `python3 ../check_dev.py --output ../my_output` after each change.
 
-No LLMs. Rules, gazetteers and classical methods only (declare any trained model here).
+`config/policy.yaml` holds your privacy settings (age band width, date shift range, minimum group size).

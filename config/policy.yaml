@@ -1,18 +1,4 @@
-# Privacy rules for the pipeline. Placeholder values: the team tunes these.
-# Everything here is a policy choice, not a result.
-
-date_shift:
-  max_days: 365            # per-patient shift, derived from RAKSHA_SECRET
-
-age_bands:
-  width: 10                # generalise exact ages to 10-year bands; never cut the real age out of its band
-  top_coded_at: 90
-
-location:
-  generalise_pin_to: district   # drop village and PIN
-
-suppression:
-  min_group_size: 5        # quasi-identifier groups smaller than this are generalised further or suppressed
-
-quarantine:
-  on_unsupported_format: true  # never copy a file we could not process
+# Your privacy rules. main.py reads simple "key: value" lines.
+age_band_years: 5          # ages become bands like 45-49 (the band must contain the true age)
+date_shift_max_days: 180   # every date of one patient moves by the same secret offset
+min_group_size: 5          # TODO: suppress or widen quasi-identifier combos rarer than this (k-anonymity)
